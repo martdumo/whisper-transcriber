@@ -1,48 +1,68 @@
-# Whisper Transcriber (Spanish)
+# 🎙️ Whisper Transcriber
 
-Script en Python para transcribir audios a texto y subtítulos (`.srt` y `.txt`)
-usando [OpenAI Whisper](https://github.com/openai/whisper) y aceleración por GPU (CUDA).
+Un pequeño proyecto en Python para transcribir audios a texto o subtítulos usando [OpenAI Whisper](https://github.com/openai/whisper).  
+Compatible con **GPU NVIDIA (CUDA 12.1)** para mayor velocidad.
 
-## 🚀 Características
-- Permite seleccionar **uno o varios audios** en una ventana gráfica.
-- Genera automáticamente:
-  - Subtítulos en formato `.srt`.
-  - Texto plano en `.txt`.
-- Usa el modelo **large** para máxima precisión en español.
-- Compatible con CUDA (usa GPU si está disponible).
+---
 
-## 🖥️ Requisitos
-- Python 3.11+
-- CUDA 12+ (opcional, recomendado si tenés GPU NVIDIA)
+## 🚀 Requisitos
+
+* Python 3.11+
+* [Git](https://git-scm.com/)
+* Tarjeta gráfica NVIDIA con soporte CUDA (opcional, pero recomendado)
+
+---
 
 ## 📦 Instalación
-Clonar el repositorio y crear entorno virtual:
+
+Cloná el repositorio y creá un entorno virtual:
 
 ```bash
-git clone https://github.com/TU_USUARIO/whisper_transcriber.git
-cd whisper_transcriber
+git clone https://github.com/martdumo/whisper-transcriber.git
+cd whisper-transcriber
+
+# Crear entorno virtual
 python -m venv venv
 venv\Scripts\activate
+
+# Instalar dependencias
 pip install -r requirements.txt
 
-▶️ Uso
+🖼️ Modo 1: Transcripción de archivos
 
-Ejecutar el script:
+Ejecutá el script principal y elegí los archivos de audio:
 
-venv\Scripts\python.exe transcribir.py
+python transcribir.py
 
-Se abrirán ventanas para:
+    Podés elegir uno o varios archivos de audio (mp3, wav, m4a, etc.)
 
-    Seleccionar uno o varios archivos de audio.
+    El resultado se guarda como .srt (subtítulo) en la carpeta que elijas.
 
-    Seleccionar carpeta de salida.
+🎤 Modo 2: Grabación en vivo (Beta)
 
-Los resultados se guardarán en la carpeta elegida.
-🎯 Modelos soportados
+Grabá desde el micrófono y obtené la transcripción automáticamente en un Bloc de Notas:
 
-Por defecto se usa el modelo large.
-Si querés cambiarlo, edita la línea MODEL = "large" en transcribir.py.
-📄 Licencia
+python grabar_y_transcribir.py
 
-Este proyecto es de uso personal/educativo.
-Whisper es de OpenAI bajo licencia MIT.
+    Se abrirá una ventana con el botón Iniciar grabación.
+
+    Grabá tu voz y presioná OK para detener.
+
+    Se transcribirá en castellano (español argentino).
+
+    Se abrirá Bloc de Notas mostrando el texto transcripto.
+
+📋 Dependencias
+
+Todas las dependencias están en requirements.txt.
+Podés reinstalarlas en cualquier momento con:
+
+pip install -r requirements.txt --force-reinstall
+
+🛠️ Notas
+
+    Este proyecto usa el modelo large de Whisper por defecto (más preciso, pero más pesado).
+
+    Para usar otro modelo (ej: medium, small, tiny), editá los scripts y cambiá la línea que carga el modelo:
+
+model = whisper.load_model("large")
