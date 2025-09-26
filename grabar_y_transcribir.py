@@ -1,112 +1,192 @@
-import sounddevice as sd
-import numpy as np
-import whisper
-import tempfile
 import os
+import datetime
 import tkinter as tk
 from tkinter import messagebox
-from scipy.io.wavfile import write
-import subprocess
-import logging
-import time
+import sounddevice as sd
+import soundfile as sf
+import numpy as np
+import whisper
+import threading
+import queue
 
-# =========================
-# Configuración logging
-# =========================
-logging.basicConfig(
-    filename="error.log",
-    level=logging.ERROR,
-    format="%(asctime)s - %(levelname)s - %(message)s"
-)
-
-# =========================
-# Configuración de audio
-# =========================
-SAMPLE_RATE = 16000
+# Configuración global
+SAMPLE_RATE = None
 CHANNELS = 1
+AUDIO_FORMAT = 'wav'
 
-# =========================
-# Función para mostrar nivel en dB
-# =========================
-def db_level(audio_chunk):
-    rms = np.sqrt(np.mean(np.square(audio_chunk)))
-    db = 20 * np.log10(rms + 1e-6)  # añadir epsilon para evitar log(0)
-    return db
+class AudioRecorder:
+    def __init__(self):
+        self.is_recording = False
+        self.is_paused = False
+        self.audio_chunks = []
+        self.stream = None
+        self.q = queue.Queue()
 
-# =========================
-# Función para normalizar volumen
-# =========================
-def normalize_audio(audio):
-    peak = np.max(np.abs(audio))
-    if peak > 0:
-        audio = audio / peak  # normaliza a [-1, 1]
-    return audio
+    def get_sample_rate(self):
+        """Detecta automáticamente el mejor sample rate del micrófono."""
+        try:
+            device_info = sd.query_devices(kind='input')
+            sr = int(device_info['default_samplerate'])
+            print(f"[INFO] Sample rate detectado: {sr} Hz")
+            return sr
+        except Exception as e:
+            print(f"[ERROR] No se pudo detectar sample rate. Usando 16000 Hz. Error: {e}")
+            return 16000
 
-# =========================
-# Función para grabar audio
-# =========================
-def grabar_audio():
-    try:
-        print("⏳ Iniciando grabación...")
-        audio_data = []
+    def audio_callback(self, indata, frames, time, status):
+        if status:
+            print(f"[WARNING] {status}")
+        if not self.is_paused:
+            self.q.put(indata.copy())
 
-        def callback(indata, frames, time_info, status):
-            audio_data.append(indata.copy())
-            nivel_db = db_level(indata)
-            print(f"\rNivel: {nivel_db:.1f} dB", end="")
+    def start_recording(self):
+        global SAMPLE_RATE
+        if self.is_recording:
+            return
+        SAMPLE_RATE = self.get_sample_rate()
+        self.is_recording = True
+        self.is_paused = False
+        self.audio_chunks = []
+        self.q = queue.Queue()
 
-        with sd.InputStream(samplerate=SAMPLE_RATE, channels=CHANNELS, callback=callback):
-            messagebox.showinfo("Grabación", "Grabando... presiona OK para detener.")
-        
-        print("\n✅ Grabación finalizada.")
-        audio_np = np.concatenate(audio_data, axis=0)
-        audio_np = normalize_audio(audio_np)
-        return audio_np
-    except Exception as e:
-        logging.error("Error durante la grabación", exc_info=True)
-        raise e
+        try:
+            self.stream = sd.InputStream(
+                samplerate=SAMPLE_RATE,
+                channels=CHANNELS,
+                callback=self.audio_callback,
+                dtype='float32'
+            )
+            self.stream.start()
+            print("[INFO] Grabación iniciada.")
+        except Exception as e:
+            print(f"[ERROR] No se pudo iniciar la grabación: {e}")
+            self.is_recording = False
+            messagebox.showerror("Error", f"No se pudo iniciar la grabación:\n{e}")
 
-# =========================
-# Función principal
-# =========================
+    def pause_recording(self):
+        if self.is_recording and not self.is_paused:
+            self.is_paused = True
+            print("[INFO] Grabación pausada.")
+
+    def resume_recording(self):
+        if self.is_recording and self.is_paused:
+            self.is_paused = False
+            print("[INFO] Grabación reanudada.")
+
+    def stop_recording(self):
+        if not self.is_recording:
+            return None
+        self.is_recording = False
+        if self.stream:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
+
+        # Vaciar la cola y acumular todos los chunks
+        while not self.q.empty():
+            self.audio_chunks.append(self.q.get())
+
+        if not self.audio_chunks:
+            print("[WARNING] No se grabó audio.")
+            return None
+
+        audio_data = np.concatenate(self.audio_chunks, axis=0)
+        print(f"[INFO] Grabación detenida. Duración aproximada: {len(audio_data) / SAMPLE_RATE:.2f} segundos.")
+        return audio_data, SAMPLE_RATE
+
+    def save_audio(self, audio_data, sample_rate):
+        timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        filename = f"grabacion_{timestamp}.wav"
+        try:
+            sf.write(filename, audio_data, sample_rate)
+            print(f"[INFO] Audio guardado como: {filename}")
+            return filename
+        except Exception as e:
+            print(f"[ERROR] No se pudo guardar el archivo: {e}")
+            messagebox.showerror("Error", f"No se pudo guardar el audio:\n{e}")
+            return None
+
+# Instancia global del grabador
+recorder = AudioRecorder()
+current_audio_file = None
+
+def transcribe_audio_async():
+    global current_audio_file
+    if not current_audio_file or not os.path.exists(current_audio_file):
+        messagebox.showwarning("Advertencia", "No hay archivo de audio para transcribir.")
+        return
+
+    def run_transcription():
+        try:
+            print("[INFO] Cargando modelo Whisper (large)...")
+            model = whisper.load_model("large")
+            print("[INFO] Transcribiendo audio...")
+            result = model.transcribe(current_audio_file, language="es")
+            txt_file = current_audio_file.replace(".wav", ".txt")
+            with open(txt_file, "w", encoding="utf-8") as f:
+                f.write(result["text"])
+            print(f"[INFO] Transcripción guardada en: {txt_file}")
+            messagebox.showinfo("Éxito", f"Transcripción completada y guardada en:\n{txt_file}")
+        except Exception as e:
+            error_msg = f"[ERROR] Falló la transcripción: {e}"
+            print(error_msg)
+            messagebox.showerror("Error", f"Falló la transcripción:\n{e}")
+
+    # Ejecutar en hilo separado para no bloquear la GUI
+    threading.Thread(target=run_transcription, daemon=True).start()
+
+def on_grabar():
+    if recorder.is_recording:
+        messagebox.showinfo("Info", "Ya estás grabando.")
+        return
+    recorder.start_recording()
+
+def on_pausar():
+    if not recorder.is_recording:
+        messagebox.showinfo("Info", "No hay grabación en curso.")
+        return
+    if recorder.is_paused:
+        messagebox.showinfo("Info", "Ya está pausado.")
+        return
+    recorder.pause_recording()
+
+def on_reanudar():
+    if not recorder.is_recording:
+        messagebox.showinfo("Info", "No hay grabación en curso.")
+        return
+    if not recorder.is_paused:
+        messagebox.showinfo("Info", "La grabación ya está activa.")
+        return
+    recorder.resume_recording()
+
+def on_detener():
+    global current_audio_file
+    if not recorder.is_recording:
+        messagebox.showinfo("Info", "No hay grabación en curso.")
+        return
+    result = recorder.stop_recording()
+    if result is None:
+        current_audio_file = None
+        return
+    audio_data, sr = result
+    current_audio_file = recorder.save_audio(audio_data, sr)
+    if current_audio_file:
+        messagebox.showinfo("Éxito", f"Grabación guardada como:\n{current_audio_file}")
+
+# --- Interfaz gráfica ---
 def main():
-    try:
-        root = tk.Tk()
-        root.withdraw()  # Oculta la ventana principal de tkinter
+    root = tk.Tk()
+    root.title("Grabador de Voz con Transcripción (Español)")
+    root.geometry("400x250")
 
-        print("🎙️ Grabador y transcriptor de audio iniciado")
+    tk.Button(root, text="▶️ Grabar", command=on_grabar, width=20, bg="#4CAF50", fg="white").pack(pady=5)
+    tk.Button(root, text="⏸️ Pausar", command=on_pausar, width=20, bg="#FFC107", fg="black").pack(pady=5)
+    tk.Button(root, text="▶️ Reanudar", command=on_reanudar, width=20, bg="#2196F3", fg="white").pack(pady=5)
+    tk.Button(root, text="⏹️ Detener y Guardar", command=on_detener, width=20, bg="#F44336", fg="white").pack(pady=5)
+    tk.Button(root, text="📝 Transcribir a Texto", command=transcribe_audio_async, width=20, bg="#9C27B0", fg="white").pack(pady=10)
 
-        # Grabar audio
-        audio_np = grabar_audio()
-
-        # Guardar audio en archivo temporal
-        temp_wav = os.path.join(tempfile.gettempdir(), "grabacion.wav")
-        write(temp_wav, SAMPLE_RATE, (audio_np * 32767).astype(np.int16))
-        print(f"💾 Audio guardado en: {temp_wav}")
-
-        # Cargar modelo Whisper
-        print("⏳ Cargando modelo Whisper (large)...")
-        model = whisper.load_model("large")
-        print("✅ Modelo cargado")
-
-        # Transcribir
-        print("⏳ Iniciando transcripción...")
-        result = model.transcribe(temp_wav, language="es", task="transcribe", verbose=True)
-        print("✅ Transcripción completada")
-
-        # Guardar transcripción en archivo temporal
-        temp_txt = os.path.join(tempfile.gettempdir(), "transcripcion.txt")
-        with open(temp_txt, "w", encoding="utf-8") as f:
-            f.write(result["text"])
-        print(f"💾 Transcripción guardada en: {temp_txt}")
-
-        # Abrir Bloc de notas
-        subprocess.Popen(["notepad.exe", temp_txt])
-        print("📝 Bloc de notas abierto con la transcripción")
-
-    except Exception as e:
-        logging.error("Error en main", exc_info=True)
-        print("❌ Ha ocurrido un error, revisá error.log para más detalles")
+    print("[INFO] Aplicación iniciada. Listo para grabar.")
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
